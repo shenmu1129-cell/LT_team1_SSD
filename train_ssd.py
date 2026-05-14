@@ -52,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--clip-grad-norm", type=float, default=10.0)
     parser.add_argument("--max-nonfinite-batches", type=int, default=20)
+    parser.add_argument("--score-threshold", type=float, default=None)
+    parser.add_argument("--progress", action="store_true", help="Show tqdm progress bars.")
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
 
@@ -253,7 +255,11 @@ def main() -> None:
         if args.quick_eval_samples is not None
         else int(train_cfg.get("quick_eval_samples", 0))
     )
-    score_threshold = float(train_cfg.get("score_threshold", 0.3))
+    score_threshold = (
+        args.score_threshold
+        if args.score_threshold is not None
+        else float(train_cfg.get("score_threshold", 0.3))
+    )
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -310,7 +316,7 @@ def main() -> None:
             log_interval=args.log_interval,
             clip_grad_norm=args.clip_grad_norm,
             max_nonfinite_batches=args.max_nonfinite_batches,
-            show_progress=(not args.no_progress and sys.stderr.isatty()),
+            show_progress=(args.progress and not args.no_progress and sys.stderr.isatty()),
         )
         epoch_loss = train_stats["loss"]
         scheduler.step()

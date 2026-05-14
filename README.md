@@ -80,7 +80,7 @@ CUDA_VISIBLE_DEVICES=0 python train_ssd.py \
 - `quick_eval.csv`：每轮快速 mAP50 / Recall
 - `train_metrics.csv`：每轮 loss、lr、quick/full mAP50、Recall、跳过 batch 数
 
-前台运行时如果安装了 `tqdm` 会显示进度条；无 `tqdm` 时仍会按 `--log-interval` 打印 batch 进度。默认每 10 个 batch 输出一次，可自行调整：
+训练默认使用普通日志输出，每 10 个 batch 打印一次，适合终端和 `nohup` 日志查看。需要进度条时额外传 `--progress` 即可。
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python train_ssd.py \
@@ -92,7 +92,8 @@ CUDA_VISIBLE_DEVICES=0 python train_ssd.py \
   --lr 0.005 \
   --quick-eval-samples 100 \
   --eval-map-every 10 \
-  --log-interval 10
+  --log-interval 10 \
+  --score-threshold 0.05
 ```
 
 ## 继续训练与微调
