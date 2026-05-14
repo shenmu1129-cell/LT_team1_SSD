@@ -101,9 +101,11 @@ class YOLODetectionDataset(Dataset):
 
         base_samples = self._discover_base_samples()
         samples: List[Tuple[Path, Path, Path]] = []
+        skipped_empty = 0
         for base_image_path in base_samples:
             label_path = self._label_path_for(base_image_path)
-            if skip_empty and not self._label_has_boxes(label_path):
+            if skip_empty and not self._label_has_valid_yolo_boxes(label_path):
+                skipped_empty += 1
                 continue
             image_path = self._override_image_path(base_image_path)
             samples.append((image_path, label_path, base_image_path))
@@ -115,6 +117,11 @@ class YOLODetectionDataset(Dataset):
                 f"No images found for split={split!r} under {self.data_root}"
             )
         self.samples = samples
+        print(
+            f"Loaded {len(self.samples)} {split} samples from {self.data_root}"
+            + (f" (skipped {skipped_empty} empty/invalid labels)" if skip_empty else ""),
+            flush=True,
+        )
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -242,7 +249,11 @@ class YOLODetectionDataset(Dataset):
                 x_center, y_center, width, height = map(float, fields[1:5])
             except ValueError as exc:
                 raise ValueError(f"Bad YOLO label at {label_path}:{line_no}: {line}") from exc
+            if not bool(torch.isfinite(torch.tensor([x_center, y_center, width, height])).all()):
+                continue
             if class_id < 0 or class_id >= self.num_foreground_classes:
+                continue
+            if width <= 0.0 or height <= 0.0:
                 continue
             x1, y1, x2, y2 = yolo_xywh_to_xyxy(
                 x_center, y_center, width, height, image_width, image_height
@@ -259,9 +270,27 @@ class YOLODetectionDataset(Dataset):
             )
         return torch.tensor(boxes, dtype=torch.float32), torch.tensor(labels, dtype=torch.int64)
 
-    @staticmethod
-    def _label_has_boxes(label_path: Path) -> bool:
-        return label_path.exists() and any(line.split() for line in _read_lines(label_path))
+    def _label_has_valid_yolo_boxes(self, label_path: Path) -> bool:
+        if not label_path.exists():
+            return False
+        for line in _read_lines(label_path):
+            fields = line.split()
+            if len(fields) < 5:
+                continue
+            try:
+                class_id = int(float(fields[0]))
+                x_center, y_center, width, height = map(float, fields[1:5])
+            except ValueError:
+                continue
+            values = torch.tensor([x_center, y_center, width, height])
+            if not bool(torch.isfinite(values).all()):
+                continue
+            if class_id < 0 or class_id >= self.num_foreground_classes:
+                continue
+            if width <= 0.0 or height <= 0.0:
+                continue
+            return True
+        return False
 
     @staticmethod
     def _build_override_index(root: Optional[Path]) -> Dict[str, Path]:

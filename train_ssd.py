@@ -50,17 +50,61 @@ def train_one_epoch(model, loader, optimizer, device: torch.device, epoch: int) 
     model.train()
     running_loss = 0.0
     num_batches = 0
+    skipped_empty_batches = 0
     start = time.time()
     for step, (images, targets) in enumerate(loader, start=1):
-        images = [image.to(device) for image in images]
-        targets = [
-            {key: value.to(device) for key, value in target.items() if torch.is_tensor(value)}
-            for target in targets
+        non_empty_indices = [
+            idx for idx, target in enumerate(targets) if target["boxes"].shape[0] > 0
         ]
-        loss_dict = model(images, targets)
+        if not non_empty_indices:
+            skipped_empty_batches += 1
+            if skipped_empty_batches <= 5:
+                print(
+                    f"epoch {epoch} step {step}: skipped batch with no valid target boxes",
+                    flush=True,
+                )
+            continue
+
+        if len(non_empty_indices) != len(targets):
+            dropped_paths = [
+                targets[idx].get("image_path", f"index={idx}")
+                for idx in range(len(targets))
+                if idx not in non_empty_indices
+            ]
+            print(
+                f"epoch {epoch} step {step}: dropped {len(dropped_paths)} empty-target images: "
+                + "; ".join(dropped_paths[:3]),
+                flush=True,
+            )
+
+        images = [images[idx].to(device) for idx in non_empty_indices]
+        kept_targets = [targets[idx] for idx in non_empty_indices]
+        tensor_targets = [
+            {key: value.to(device) for key, value in target.items() if torch.is_tensor(value)}
+            for target in kept_targets
+        ]
+        loss_dict = model(images, tensor_targets)
         losses = sum(loss for loss in loss_dict.values())
-        if not math.isfinite(float(losses.item())):
-            raise RuntimeError(f"Non-finite loss at epoch={epoch}, step={step}: {loss_dict}")
+        finite_losses = all(math.isfinite(float(loss.item())) for loss in loss_dict.values())
+        if not finite_losses or not math.isfinite(float(losses.item())):
+            debug_rows = []
+            for target in kept_targets:
+                boxes = target["boxes"]
+                labels = target["labels"]
+                debug_rows.append(
+                    {
+                        "image": target.get("image_path", ""),
+                        "label": target.get("label_path", ""),
+                        "num_boxes": int(boxes.shape[0]),
+                        "labels": labels.tolist(),
+                        "boxes_min": float(boxes.min().item()) if boxes.numel() else None,
+                        "boxes_max": float(boxes.max().item()) if boxes.numel() else None,
+                    }
+                )
+            raise RuntimeError(
+                f"Non-finite loss at epoch={epoch}, step={step}: {loss_dict}. "
+                f"Batch debug: {debug_rows}"
+            )
 
         optimizer.zero_grad(set_to_none=True)
         losses.backward()
@@ -76,7 +120,9 @@ def train_one_epoch(model, loader, optimizer, device: torch.device, epoch: int) 
                 f"loss={running_loss / num_batches:.4f} {loss_text} {elapsed:.1f}s",
                 flush=True,
             )
-    return running_loss / max(num_batches, 1)
+    if num_batches == 0:
+        raise RuntimeError("No valid training batches were found. Check label paths and class ids.")
+    return running_loss / num_batches
 
 
 def save_checkpoint(path: Path, model, optimizer, scheduler, epoch: int, metrics: Dict[str, float], cfg: Dict[str, Any]) -> None:
